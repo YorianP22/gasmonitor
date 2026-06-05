@@ -56,24 +56,28 @@
     const { useState, useEffect, useMemo } = React;
 
     // ========== KONFIGURASI ==========
-    // Ganti dengan URL Web App Google Apps Script Anda
-    const API_BASE_URL = 'api/proxy';
+    // Menggunakan proxy internal Vercel (tanpa menyebut URL Apps Script di frontend)
+    const API_PROXY = '/api/proxy';
 
-    // ========== FUNGSI API ==========
+    // ========== FUNGSI API via PROXY ==========
     const apiRequest = async (action, data = {}, token = null) => {
       const body = { action };
       if (token) body.token = token;
       if (Object.keys(data).length) body.data = data;
       
-      const response = await fetch(API_BASE_URL, {
+      const response = await fetch(API_PROXY, {
         method: 'POST',
-        mode: 'cors',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const result = await response.json();
       if (!result.success) {
-        // Jika token tidak valid, hapus session dan redirect ke login
+        // Jika token tidak valid, hapus session dan reload ke login
         if (result.message === 'Sesi berakhir, silakan login kembali' || result.message === 'Token tidak valid') {
           localStorage.removeItem('token');
           localStorage.removeItem('user');
@@ -258,7 +262,7 @@
       });
     };
 
-    // ========== KOMPONEN PAGINATION (sama seperti sebelumnya) ==========
+    // ========== KOMPONEN PAGINATION ==========
     const TablePagination = ({ currentPage, totalItems, rowsPerPage, onPageChange, onRowsPerPageChange }) => {
       const totalPages = Math.ceil(totalItems / rowsPerPage) || 1;
       const [jumpInput, setJumpInput] = useState('');
