@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>Monitoring Presensi Korwil Sine</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'sans-serif'] } } } }</script>
+  <script src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .loader { border-top-color: #0d6efd; animation: spinner 1.5s linear infinite; }
+    @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .bg-late { background-color: #fef9c3 !important; }
+    .bg-outside { background-color: #fee2e2 !important; }
+    .bg-psw { background-color: #d1fae5 !important; }
+    .animate-slide-left { animation: slideInLeft 0.5s ease-out; }
+    .animate-slide-right { animation: slideInRight 0.5s ease-out; }
+    @keyframes slideInLeft { from { transform: translateX(-30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideInRight { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ======================= KONFIGURASI API =======================
+    // !!! GANTI DENGAN URL WEB APP ANDA !!!
+    const API_BASE_URL = '/api/proxy'; // <-- GANTI INI
+    
+    // Fungsi panggil API dengan token
+    const callApi = async (action, data = {}, requireToken = true) => {
+      const token = localStorage.getItem('authToken');
+      if (requireToken && !token) throw new Error('Sesi habis, silakan login ulang');
+      const payload = { action, data, token: requireToken ? token : null };
+      const response = await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (!result.success) {
+        if (result.message && result.message.includes('Sesi berakhir')) {
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('user');
+          window.location.reload();
+          throw new Error('Sesi habis, silakan login kembali');
+        }
+        throw new Error(result.message || 'Terjadi kesalahan');
+      }
+      return result;
+    };
+
+    const loginApi = async (username, password) => {
+      const payload = { action: 'login', data: { username, password }, token: null };
+      const res = await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await res.json();
+      if (!result.success) throw new Error(result.message || 'Login gagal');
+      return result.data;
+    };
+
+    const logoutApi = async () => {
+      const token = localStorage.getItem('authToken');
+      if (token) {
+        try { await callApi('logout', {}, true); } catch(e) {}
+      }
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+    };
+
+    // Daftar lembaga
+    const lembagaList = [
+      "SDN GENDOL 1", "SDN GIRIKERTO 1", "SDN GIRIKERTO 2", "SDN HARGOSARI 1",
+      "SDN HARGOSARI 2", "SDN JAGIR 1", "SDN TULAKAN 4", "SDN JAGIR 2",
+      "SDN KUNIRAN 3", "SDN JAGIR 3", "SDN JAGIR 4", "SDN KAUMAN 1",
+      "SDN KETANGGUNG 1", "SDN KUNIRAN 1", "SDN KUNIRAN 2", "SDN NGRENDENG 2",
+      "SDN SINE 1", "SDN PANDANSARI", "SDN POCOL", "SDN SINE 3",
+      "SDN SUMBEREJO 1", "SDN SUMBERSARI 1", "SDN SUMBERSARI 2", "SDN TULAKAN 1",
+      "SDN TULAKAN 2", "SDN TULAKAN 3", "SDN TULAKAN 6", "SDN WONOSARI 1", "SDN WONOSARI 2"
+    ];
+
+    // Helper functions
+    const extractFileIdFromDriveUrl = (url) => {
+      if (!url) return null;
+      let m = url.match(/\/file\/d\/([^\/]+)/);
+      if (m) return m[1];
+      m = url.match(/[?&]id=([^&]+)/);
+      return m ? m[1] : null;
+    };
+    const checkLateStatus = (waktuStr, jenis) => {
+      if (!waktuStr || jenis?.toLowerCase() !== 'datang') return false;
+      try {
+        const parts = waktuStr.split('pukul ');
+        if (parts.length < 2) return false;
+        const [hh, mm] = parts[1].trim().split(/[\.\:]/);
+        return (parseInt(hh)*60 + parseInt(mm)) > 450;
+      } catch(e) { return false; }
+    };
+    const isOutsideRadius = (ket) => ket && ket.toLowerCase().includes('luar radius');
+    const isTidakHadir = (ket) => ket && (ket.toLowerCase().includes('tidak hadir') || ket.toLowerCase().includes('hari libur'));
+    const normalizeName = (name) => name ? name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() : '';
+    const parsePresensiDate = (waktuStr) => {
+      if (!waktuStr) return null;
+      const parts = waktuStr.split('pukul')[0].trim();
+      const dateParts = parts.split(', ')[1];
+      if (!dateParts) return null;
+      const [day, monthName, year] = dateParts.split(' ');
+      const monthMap = { 'Januari':1,'Februari':2,'Maret':3,'April':4,'Mei':5,'Juni':6,'Juli':7,'Agustus':8,'September':9,'Oktober':10,'November':11,'Desember':12 };
+      const month = monthMap[monthName];
+      if (!month) return null;
+      return `${day.padStart(2,'0')}/${month.toString().padStart(2,'0')}/${year}`;
+    };
+    const parseIjinDate = (dateStr) => {
+      if (!dateStr) return null;
+      const [year, month, day] = dateStr.split('-');
+      return `${day.padStart(2,'0')}/${month.padStart(2,'0')}/${year}`;
+    };
+    const isDateInRange = (dateStr, startStr, endStr) => {
+      if (!dateStr || !startStr || !endStr) return false;
+      const toNum = (d) => { const [dd,mm,yyyy] = d.split('/').map(Number); return yyyy*10000+mm*100+dd; };
+      return toNum(dateStr) >= toNum(startStr) && toNum(dateStr) <= toNum(endStr);
+    };
+    const enrichPresensiWithIjin = (presensi, ijin) => {
+      if (!presensi || !ijin) return presensi;
+      const approved = ijin.filter(i => i.Status && i.Status.toLowerCase() === 'disetujui');
+      return presensi.map(p => {
+        const psw = approved.some(item => {
+          if (normalizeName(p['Nama Pegawai']) !== normalizeName(item['Nama Pegawai'])) return false;
+          const pDate = parsePresensiDate(p['Waktu']);
+          if (!pDate) return false;
+          const start = parseIjinDate(item['Tanggal Awal']);
+          const end = parseIjinDate(item['Tanggal Berakir']);
+          return start && end && isDateInRange(pDate, start, end);
+        });
+        return { ...p, isPSW: psw, displayRadius: psw ? 'PSW' : p['Keterangan Radius'] };
+      });
+    };
+
+    // Komponen Pagination
+    const TablePagination = ({ currentPage, totalItems, rowsPerPage, onPageChange, onRowsPerPageChange }) => {
+      const totalPages = Math.ceil(totalItems / rowsPerPage) || 1;
+      const [jump, setJump] = React.useState('');
+      const handleJump = () => { let page = parseInt(jump,10); if(isNaN(page)) page=1; if(page<1) page=1; if(page>totalPages) page=totalPages; onPageChange(page); setJump(''); };
+      return (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-white rounded-xl shadow-sm border">
+          <div className="flex items-center gap-2"><span className="text-sm">Tampilkan</span>
+            <select className="border rounded px-2 py-1 text-sm" value={rowsPerPage} onChange={e=>{ const val=e.target.value==='all'?totalItems:Number(e.target.value); onRowsPerPageChange(val); onPageChange(1); }}>
+              <option value={10}>10</option><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option><option value="all">Semua</option>
+            </select><span className="text-sm">dari {totalItems}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button disabled={currentPage===1} onClick={()=>onPageChange(currentPage-1)} className="px-3 py-1 rounded bg-slate-200 disabled:opacity-50">Prev</button>
+            <span className="text-sm">Halaman {currentPage} / {totalPages}</span>
+            <button disabled={currentPage===totalPages} onClick={()=>onPageChange(currentPage+1)} className="px-3 py-1 rounded bg-slate-200 disabled:opacity-50">Next</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="number" min="1" max={totalPages} value={jump} onChange={e=>setJump(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleJump()} className="w-16 border rounded px-2 py-1 text-sm text-center" placeholder="No" />
+            <button onClick={handleJump} className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Go</button>
+          </div>
+        </div>
+      );
+    };
+
+    // ========== LOGIN ==========
+    const Login = ({ onLogin }) => {
+      const [username, setUsername] = React.useState('');
+      const [password, setPassword] = React.useState('');
+      const [loading, setLoading] = React.useState(false);
+      const [showPw, setShowPw] = React.useState(false);
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+          const userData = await loginApi(username, password);
+          localStorage.setItem('authToken', userData.token);
+          localStorage.setItem('user', JSON.stringify({ nama: userData.nama, role: userData.role, lembaga: userData.lembaga, username: userData.username }));
+          onLogin(userData);
+        } catch (err) { Swal.fire('Error', err.message, 'error'); }
+        setLoading(false);
+      };
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col md:flex-row">
+            <div className="md:w-1/2 p-8 lg:p-12 animate-slide-left">
+              <div className="mb-8 text-center md:text-left"><div className="w-20 h-20 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto md:mx-0 mb-4"><i className="fas fa-fingerprint text-5xl text-blue-600"></i></div><h2 className="text-3xl font-black">Korwil Sine</h2><p className="text-slate-500">Sistem Monitoring Presensi</p></div>
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div><label className="block text-xs font-bold uppercase text-slate-400">Username</label><input type="text" required className="w-full px-5 py-4 border-2 rounded-xl focus:ring-blue-200 focus:border-blue-600" value={username} onChange={e=>setUsername(e.target.value)} /></div>
+                <div><label className="block text-xs font-bold uppercase text-slate-400">Password</label><div className="relative"><input type={showPw?'text':'password'} required className="w-full px-5 py-4 border-2 rounded-xl pr-12" value={password} onChange={e=>setPassword(e.target.value)} /><button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" onClick={()=>setShowPw(!showPw)}><i className={`fas ${showPw?'fa-eye-slash':'fa-eye'}`}></i></button></div></div>
+                <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black text-lg">{loading?'Memproses...':'MASUK'}</button>
+              </form>
+            </div>
+            <div className="hidden md:flex md:w-1/2 bg-gradient-to-br from-blue-600 to-indigo-800 p-12 flex-col justify-center items-center text-white animate-slide-right">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Lambang_Kabupaten_Ngawi_%28svg%29.svg/1280px-Lambang_Kabupaten_Ngawi_%28svg%29.svg.png" alt="Logo" className="w-48 h-48 object-contain mb-8 drop-shadow-2xl" onError={e=>e.target.src='https://placehold.co/200'}/>
+              <h3 className="text-4xl font-black text-center">Monitoring Presensi Korwil Sine</h3>
+              <p className="text-lg mt-4 text-blue-100">Dinas Pendidikan Kabupaten Ngawi</p>
+              <div className="mt-8 flex gap-4 text-sm bg-white/20 py-3 px-6 rounded-full"><i className="fas fa-calendar-alt"></i><span>{new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</span></div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ========== DASHBOARD PRESENSI (Lengkap) ==========
+    const Dashboard = ({ data, refreshData, userRole, userLembaga }) => {
+      const [filterLembaga, setFilterLembaga] = React.useState('');
+      const [filterNama, setFilterNama] = React.useState('');
+      const [editingRow, setEditingRow] = React.useState(null);
+      const [editVal, setEditVal] = React.useState('');
+      const [modalImg, setModalImg] = React.useState(null);
+      const [modalMap, setModalMap] = React.useState(null);
+      const [currentPage, setCurrentPage] = React.useState(1);
+      const [rowsPerPage, setRowsPerPage] = React.useState(10);
+      const [showRangeModal, setShowRangeModal] = React.useState(false);
+      const [rangeStart, setRangeStart] = React.useState('');
+      const [rangeEnd, setRangeEnd] = React.useState('');
+      const [rangeStatus, setRangeStatus] = React.useState('Libur');
+      const [rangeKeterangan, setRangeKeterangan] = React.useState('');
+      const [showCRUDModal, setShowCRUDModal] = React.useState(false);
+      const [crudMode, setCrudMode] = React.useState('add');
+      const [currentRowIndex, setCurrentRowIndex] = React.useState(null);
+      const [formValues, setFormValues] = React.useState({ 'Hari Tanggal':'','Waktu':'','Jenis Presensi':'','Nama Lembaga':'','Nama Pegawai':'','Nip':'','Bukti Dukung':'','Latitude':'','Longitude':'','Jarak Absen':'','Keterangan Radius':'','Keterangan Bukti':'' });
+      const canEditLembaga = userRole === 'Admin' || userRole === 'User' || userRole === 'Superuser';
+      const canManageLibur = userRole === 'Admin' || userRole === 'Superuser';
+      const canViewBukti = userRole === 'Admin' || userRole === 'User' || userRole === 'Superuser';
+      const isAdmin = userRole === 'Admin';
+      React.useEffect(() => { if (!canEditLembaga && userLembaga) setFilterLembaga(userLembaga); }, [canEditLembaga, userLembaga]);
+      const filtered = React.useMemo(() => data.filter(i => (i['Nama Lembaga'] || '').toLowerCase().includes(filterLembaga.toLowerCase()) && (i['Nama Pegawai'] || '').toLowerCase().includes(filterNama.toLowerCase())), [data, filterLembaga, filterNama]);
+      React.useEffect(() => setCurrentPage(1), [filterLembaga, filterNama]);
+      const totalItems = filtered.length;
+      React.useEffect(() => { if (rowsPerPage > totalItems && totalItems > 0) setRowsPerPage(totalItems); else if (totalItems === 0) setRowsPerPage(10); }, [totalItems, rowsPerPage]);
+      const effectiveRowsPerPage = rowsPerPage === totalItems ? totalItems : rowsPerPage;
+      const paginatedData = filtered.slice((currentPage-1)*effectiveRowsPerPage, currentPage*effectiveRowsPerPage);
+      const stats = React.useMemo(() => { let datang=0,pulang=0,dalam=0,luar=0,psw=0,tidakhadir=0; filtered.forEach(item=>{ const jenis=(item['Jenis Presensi']||'').toLowerCase(); const radius=(item.displayRadius||item['Keterangan Radius']||'').toLowerCase(); if(jenis.includes('datang')) datang++; if(jenis.includes('pulang')) pulang++; if(radius.includes('luar radius')) luar++; else if(radius.includes('dalam radius')) dalam++; else if(radius==='psw') psw++; else if(radius.includes('tidak hadir')||radius.includes('hari libur')) tidakhadir++; }); return {datang,pulang,dalam,luar,psw,tidakhadir}; }, [filtered]);
+      const handleSaveKet = async (idx) => { try{ await callApi('updateKeteranganBukti', { rowIndex: idx, keterangan: editVal }); Swal.fire({icon:'success',title:'Tersimpan',timer:1000,showConfirmButton:false}); setEditingRow(null); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } };
+      const openAddModal = () => { setCrudMode('add'); setCurrentRowIndex(null); setFormValues({'Hari Tanggal':'','Waktu':'','Jenis Presensi':'','Nama Lembaga':'','Nama Pegawai':'','Nip':'','Bukti Dukung':'','Latitude':'','Longitude':'','Jarak Absen':'','Keterangan Radius':'','Keterangan Bukti':''}); setShowCRUDModal(true); };
+      const openEditModal = (item) => { setCrudMode('edit'); setCurrentRowIndex(item._rowIndex); setFormValues({'Hari Tanggal':item['Hari Tanggal']||'','Waktu':item['Waktu']||'','Jenis Presensi':item['Jenis Presensi']||'','Nama Lembaga':item['Nama Lembaga']||'','Nama Pegawai':item['Nama Pegawai']||'','Nip':item['Nip']||'','Bukti Dukung':item['Bukti Dukung']||'','Latitude':item['Latitude']||'','Longitude':item['Longitude']||'','Jarak Absen':item['Jarak Absen']||'','Keterangan Radius':item['Keterangan Radius']||'','Keterangan Bukti':item['Keterangan Bukti']||''}); setShowCRUDModal(true); };
+      const handleDelete = async (rowIndex, nama) => { const confirm = await Swal.fire({title:'Hapus Presensi?',text:`Yakin ingin menghapus data ${nama}?`,icon:'warning',showCancelButton:true}); if(confirm.isConfirmed){ try{ await callApi('deletePresensi',{rowIndex}); Swal.fire({icon:'success',title:'Terhapus',timer:1500}); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } } };
+      const handleSubmitCRUD = async () => { if(!formValues['Waktu']||!formValues['Jenis Presensi']||!formValues['Nama Pegawai']){ Swal.fire('Peringatan','Waktu, Jenis, Nama Pegawai wajib','warning'); return; } try{ if(crudMode==='add') await callApi('addPresensi', formValues); else await callApi('updatePresensi', { rowIndex: currentRowIndex, values: formValues }); Swal.fire({icon:'success',title:'Berhasil',timer:1500}); setShowCRUDModal(false); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } };
+      return (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xl"><i className="fas fa-sign-in-alt"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">Absen Datang</p><p className="text-2xl font-black text-slate-800">{stats.datang}</p></div></div>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center text-xl"><i className="fas fa-sign-out-alt"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">Absen Pulang</p><p className="text-2xl font-black text-slate-800">{stats.pulang}</p></div></div>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl"><i className="fas fa-map-marker-alt"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">Dalam Radius</p><p className="text-2xl font-black text-slate-800">{stats.dalam}</p></div></div>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xl"><i className="fas fa-exclamation-triangle"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">Luar Radius</p><p className="text-2xl font-black text-slate-800">{stats.luar}</p></div></div>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-xl"><i className="fas fa-check-circle"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">PSW</p><p className="text-2xl font-black text-slate-800">{stats.psw}</p></div></div>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-xl"><i className="fas fa-ban"></i></div><div><p className="text-xs text-slate-500 font-bold uppercase">Tidak Hadir</p><p className="text-2xl font-black text-slate-800">{stats.tidakhadir}</p></div></div>
+          </div>
+          <div className="bg-white p-5 rounded-2xl shadow-sm border flex flex-wrap gap-4 items-center">
+            <h3 className="font-bold text-lg text-slate-700 w-full md:w-auto mr-4">Filter Data:</h3>
+            <input type="text" placeholder="Cari Lembaga..." className={`border p-3 rounded-xl flex-1 text-sm outline-none focus:border-blue-500 ${!canEditLembaga?'bg-slate-100 cursor-not-allowed':''}`} value={filterLembaga} onChange={e=>canEditLembaga&&setFilterLembaga(e.target.value)} disabled={!canEditLembaga} />
+            <input type="text" placeholder="Cari Nama Pegawai..." className="border p-3 rounded-xl flex-1 text-sm outline-none focus:border-blue-500" value={filterNama} onChange={e=>setFilterNama(e.target.value)} />
+            {!canEditLembaga && userLembaga && (<span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full"><i className="fas fa-lock mr-1"></i> Filter lembaga dikunci</span>)}
+            {canManageLibur && (<button onClick={()=>setShowRangeModal(true)} className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-3 rounded-xl font-bold flex items-center gap-2"><i className="fas fa-calendar-alt"></i> Atur Libur Manual</button>)}
+            {isAdmin && (<button onClick={openAddModal} className="bg-green-600 hover:bg-green-700 text-white px-5 py-3 rounded-xl font-bold flex items-center gap-2"><i className="fas fa-plus-circle"></i> Tambah Presensi</button>)}
+          </div>
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-blue-700 text-white border-b"><tr><th className="px-4 py-4">Waktu Presensi</th><th className="px-4 py-4">Lembaga</th><th className="px-4 py-4">Pegawai</th><th className="px-4 py-4 text-center">Bukti/Map</th><th className="px-4 py-4">Radius Status</th><th className="px-4 py-4">Ket. Bukti</th>{isAdmin && <th className="px-4 py-4 text-center">Aksi</th>}</tr></thead>
+                <tbody className="divide-y">{paginatedData.map((item,i)=>{ const out=isOutsideRadius(item.displayRadius); const late=checkLateStatus(item['Waktu'],item['Jenis Presensi']); const tidak=isTidakHadir(item.displayRadius); const isPSW=item.isPSW; let bg="bg-white"; if(isPSW) bg="bg-psw"; else if(tidak) bg="bg-black text-white"; else if(out) bg="bg-outside"; else if(late) bg="bg-late"; return (<tr key={i} className={`${bg} transition-colors`}><td className="px-4 py-3 whitespace-nowrap"><span className="font-medium">{item['Waktu']}</span><br/><span className="text-[10px] px-1.5 py-0.5 bg-slate-200 rounded">{item['Jenis Presensi']}</span></td><td className="px-4 py-3">{item['Nama Lembaga']}</td><td className="px-4 py-3"><div className="font-bold">{item['Nama Pegawai']}</div><div className="text-xs opacity-70">{item['Nip']}</div></td><td className="px-4 py-3 text-center"><div className="flex justify-center gap-2">{canViewBukti?<button onClick={()=>setModalImg(item['Bukti Dukung'])} className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200"><i className="fas fa-image"></i></button>:<span className="w-8 h-8 rounded-full bg-slate-100 text-slate-400"><i className="fas fa-lock"></i></span>}<button onClick={()=>setModalMap({lat:item.Latitude,lng:item.Longitude})} className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 hover:bg-emerald-200"><i className="fas fa-map-marker-alt"></i></button></div></td><td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-black uppercase ${isPSW?'bg-green-600 text-white':tidak?'bg-black text-white':out?'bg-red-600 text-white':'bg-green-600 text-white'}`}>{item.displayRadius}</span><div className="text-[10px] mt-1">{item['Jarak Absen']}</div></td><td className="px-4 py-3 min-w-[150px]">{editingRow===item._rowIndex?(<div className="flex gap-1"><input className="border p-1 rounded text-xs flex-1" value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus/><button onClick={()=>handleSaveKet(item._rowIndex)} className="bg-green-600 text-white px-2 py-1 rounded"><i className="fas fa-check"></i></button></div>):(<div className="flex justify-between items-center group cursor-pointer" onClick={()=>{setEditingRow(item._rowIndex); setEditVal(item['Keterangan Bukti']||'');}}><span className="truncate max-w-[120px]">{item['Keterangan Bukti']||'-'}</span><i className="fas fa-pencil-alt text-slate-300 group-hover:text-blue-500"></i></div>)}</td>{isAdmin&&<td className="px-4 py-3 text-center"><div className="flex gap-2 justify-center"><button onClick={()=>openEditModal(item)} className="text-blue-600 hover:bg-blue-50 w-8 h-8 rounded-lg"><i className="fas fa-edit"></i></button><button onClick={()=>handleDelete(item._rowIndex,item['Nama Pegawai'])} className="text-red-600 hover:bg-red-50 w-8 h-8 rounded-lg"><i className="fas fa-trash-alt"></i></button></div></td>}</tr>);})}</tbody>
+              </table>
+            </div>
+            <TablePagination currentPage={currentPage} totalItems={totalItems} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+          </div>
+          {/* Modal Image & Map & Libur & CRUD (sederhana) */}
+          {modalImg && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={()=>setModalImg(null)}><div className="bg-white rounded-xl max-w-4xl w-full"><div className="p-4 bg-blue-700 text-white flex justify-between"><span>Bukti Dukung</span><button onClick={()=>setModalImg(null)}>&times;</button></div><div className="h-[80vh] flex items-center justify-center">{(modalImg.includes('drive.google.com')?<iframe src={`https://drive.google.com/file/d/${extractFileIdFromDriveUrl(modalImg)}/preview`} className="w-full h-full"/>:<img src={modalImg} className="max-h-full max-w-full"/>)}</div></div></div>)}
+          {modalMap && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={()=>setModalMap(null)}><div className="bg-white rounded-xl w-full max-w-3xl"><div className="p-4 bg-blue-700 text-white flex justify-between"><span>Lokasi</span><button onClick={()=>setModalMap(null)}>&times;</button></div><iframe width="100%" height="450" frameBorder="0" src={`https://maps.google.com/maps?q=${modalMap.lat},${modalMap.lng}&z=16&output=embed`}></iframe></div></div>)}
+          {showRangeModal && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={()=>setShowRangeModal(false)}><div className="bg-white rounded-xl max-w-lg w-full p-6"><h4 className="font-bold text-xl mb-4">Atur Libur Manual</h4><input type="date" className="w-full border p-3 rounded mb-2" value={rangeStart} onChange={e=>setRangeStart(e.target.value)} placeholder="Awal"/><input type="date" className="w-full border p-3 rounded mb-2" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} placeholder="Akhir"/><select className="w-full border p-3 rounded mb-2" value={rangeStatus} onChange={e=>setRangeStatus(e.target.value)}><option>Libur</option><option>Cuti Bersama</option><option>Izin</option><option>Sakit</option></select><textarea className="w-full border p-3 rounded mb-4" rows="2" placeholder="Keterangan" value={rangeKeterangan} onChange={e=>setRangeKeterangan(e.target.value)}></textarea><div className="flex justify-end gap-2"><button onClick={()=>setShowRangeModal(false)} className="px-4 py-2 border rounded">Batal</button><button onClick={async ()=>{ if(!rangeStart||!rangeEnd){ Swal.fire('Isi tanggal','','warning'); return; } try{ await callApi('setStatusRentang',{startDate:rangeStart,endDate:rangeEnd,status:rangeStatus,keterangan:rangeKeterangan}); Swal.fire('Berhasil','Data diupdate','success'); setShowRangeModal(false); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } }} className="px-4 py-2 bg-purple-600 text-white rounded">Terapkan</button></div></div></div>)}
+          {showCRUDModal && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={()=>setShowCRUDModal(false)}><div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-auto p-6"><h4 className="font-bold text-xl mb-4">{crudMode==='add'?'Tambah Presensi':'Edit Presensi'}</h4><div className="grid grid-cols-2 gap-3"><input placeholder="Hari Tanggal" value={formValues['Hari Tanggal']} onChange={e=>setFormValues({...formValues,'Hari Tanggal':e.target.value})} className="border p-2 rounded"/><input placeholder="Waktu *" value={formValues['Waktu']} onChange={e=>setFormValues({...formValues,'Waktu':e.target.value})} className="border p-2 rounded"/><select value={formValues['Jenis Presensi']} onChange={e=>setFormValues({...formValues,'Jenis Presensi':e.target.value})} className="border p-2 rounded"><option value="">Jenis *</option><option>Datang</option><option>Pulang</option></select><input placeholder="Nama Lembaga" value={formValues['Nama Lembaga']} onChange={e=>setFormValues({...formValues,'Nama Lembaga':e.target.value})} className="border p-2 rounded"/><input placeholder="Nama Pegawai *" value={formValues['Nama Pegawai']} onChange={e=>setFormValues({...formValues,'Nama Pegawai':e.target.value})} className="border p-2 rounded"/><input placeholder="Nip" value={formValues['Nip']} onChange={e=>setFormValues({...formValues,'Nip':e.target.value})} className="border p-2 rounded"/><input placeholder="Bukti Dukung (URL)" value={formValues['Bukti Dukung']} onChange={e=>setFormValues({...formValues,'Bukti Dukung':e.target.value})} className="border p-2 rounded"/><input placeholder="Latitude" value={formValues['Latitude']} onChange={e=>setFormValues({...formValues,'Latitude':e.target.value})} className="border p-2 rounded"/><input placeholder="Longitude" value={formValues['Longitude']} onChange={e=>setFormValues({...formValues,'Longitude':e.target.value})} className="border p-2 rounded"/><input placeholder="Jarak Absen" value={formValues['Jarak Absen']} onChange={e=>setFormValues({...formValues,'Jarak Absen':e.target.value})} className="border p-2 rounded"/><input placeholder="Keterangan Radius" value={formValues['Keterangan Radius']} onChange={e=>setFormValues({...formValues,'Keterangan Radius':e.target.value})} className="border p-2 rounded"/><input placeholder="Keterangan Bukti" value={formValues['Keterangan Bukti']} onChange={e=>setFormValues({...formValues,'Keterangan Bukti':e.target.value})} className="border p-2 rounded"/></div><div className="flex justify-end gap-2 mt-4"><button onClick={()=>setShowCRUDModal(false)} className="px-4 py-2 border rounded">Batal</button><button onClick={handleSubmitCRUD} className="px-4 py-2 bg-blue-600 text-white rounded">Simpan</button></div></div></div>)}
+        </div>
+      );
+    };
+
+    // ========== DOKUMEN IJIN ==========
+    const DokumenIjin = ({ data, refreshData, userRole, userLembaga }) => {
+      const [modalPdf, setModalPdf] = React.useState(null);
+      const [editRow, setEditRow] = React.useState(null);
+      const [status, setStatus] = React.useState('');
+      const [ket, setKet] = React.useState('');
+      const [filterLembaga, setFilterLembaga] = React.useState('');
+      const [filterNama, setFilterNama] = React.useState('');
+      const [currentPage, setCurrentPage] = React.useState(1);
+      const [rowsPerPage, setRowsPerPage] = React.useState(10);
+      const canEditLembaga = userRole === 'Admin' || userRole === 'User' || userRole === 'Superuser';
+      const canEditData = userRole === 'Admin' || userRole === 'User' || userRole === 'Superuser';
+      React.useEffect(() => { if (!canEditLembaga && userLembaga) setFilterLembaga(userLembaga); }, [canEditLembaga, userLembaga]);
+      const filtered = React.useMemo(() => data.filter(item => (item['Nama Lembaga']||'').toLowerCase().includes(filterLembaga.toLowerCase()) && (item['Nama Pegawai']||'').toLowerCase().includes(filterNama.toLowerCase())), [data, filterLembaga, filterNama]);
+      React.useEffect(() => setCurrentPage(1), [filterLembaga, filterNama]);
+      const totalItems = filtered.length;
+      React.useEffect(() => { if (rowsPerPage > totalItems && totalItems > 0) setRowsPerPage(totalItems); else if (totalItems === 0) setRowsPerPage(10); }, [totalItems, rowsPerPage]);
+      const effectiveRowsPerPage = rowsPerPage === totalItems ? totalItems : rowsPerPage;
+      const paginatedData = filtered.slice((currentPage-1)*effectiveRowsPerPage, currentPage*effectiveRowsPerPage);
+      const handleSave = async (idx) => { try{ await callApi('updateDokumenIjin', { rowIndex: idx, status, keterangan: ket }); Swal.fire({icon:'success',title:'Update',timer:1000}); setEditRow(null); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } };
+      const handleDelete = async (rowIndex, nama) => { const confirm = await Swal.fire({title:'Hapus?',text:`Hapus ${nama}?`,icon:'warning',showCancelButton:true}); if(confirm.isConfirmed){ try{ await callApi('deleteDokumenIjin',{rowIndex}); Swal.fire('Terhapus','','success'); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } } };
+      return (
+        <div className="space-y-6">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border flex flex-wrap gap-4"><h3 className="font-bold">Filter Dokumen Ijin:</h3><input type="text" placeholder="Lembaga" className={`border p-3 rounded-xl flex-1 ${!canEditLembaga?'bg-slate-100':''}`} value={filterLembaga} onChange={e=>canEditLembaga&&setFilterLembaga(e.target.value)} disabled={!canEditLembaga}/><input type="text" placeholder="Nama Pegawai" className="border p-3 rounded-xl flex-1" value={filterNama} onChange={e=>setFilterNama(e.target.value)}/>{!canEditLembaga && userLembaga && <span className="text-xs text-blue-600"><i className="fas fa-lock"></i> Filter dikunci</span>}</div>
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-blue-700 text-white"><tr><th className="px-4 py-4">Nama Pegawai</th><th className="px-4 py-4">Jenis Ijin</th><th className="px-4 py-4">Tanggal Awal</th><th className="px-4 py-4">Tanggal Akhir</th><th className="px-4 py-4">File</th><th className="px-4 py-4">Status</th><th className="px-4 py-4">Keterangan</th>{canEditData&&<th>Aksi</th>}</tr></thead><tbody>{paginatedData.map(item=>(<tr key={item._rowIndex}><td className="px-4 py-3"><div className="font-bold">{item['Nama Pegawai']}</div><div className="text-[10px]">{item['Nama Lembaga']}</div></td><td>{item['Jenis Ijin']}</td><td>{item['Tanggal Awal']}</td><td>{item['Tanggal Berakir']}</td><td className="text-center"><button onClick={()=>setModalPdf(item['File URL'])} className="bg-red-600 text-white px-3 py-1 rounded text-[10px]"><i className="fas fa-file-pdf"></i> PDF</button></td><td>{editRow===item._rowIndex?<select value={status} onChange={e=>setStatus(e.target.value)}><option>Diajukan</option><option>DiSetujui</option><option>Ditolak</option></select>:<span className={`px-2 py-1 rounded text-[10px] font-black ${item.Status==='Disetujui'?'bg-green-100 text-green-700':item.Status==='Ditolak'?'bg-red-100 text-red-700':'bg-blue-100'}`}>{item.Status}</span>}</td><td>{editRow===item._rowIndex?<input className="border p-1 rounded" value={ket} onChange={e=>setKet(e.target.value)}/>:<span>{item.Keterangan||'-'}</span>}</td>{canEditData&&<td>{editRow===item._rowIndex?<button onClick={()=>handleSave(item._rowIndex)} className="bg-green-600 text-white p-1 rounded"><i className="fas fa-save"></i></button>:<><button onClick={()=>{setEditRow(item._rowIndex); setStatus(item.Status); setKet(item.Keterangan);}} className="text-blue-600"><i className="fas fa-edit"></i></button><button onClick={()=>handleDelete(item._rowIndex,item['Nama Pegawai'])} className="text-red-600 ml-2"><i className="fas fa-trash"></i></button></>}</td>}</tr>))}</tbody></table></div><TablePagination currentPage={currentPage} totalItems={totalItems} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage}/></div>
+          {modalPdf && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={()=>setModalPdf(null)}><div className="bg-white rounded-xl w-full max-w-5xl h-[90vh]"><div className="p-4 bg-blue-700 text-white flex justify-between"><span>PDF</span><button onClick={()=>setModalPdf(null)}>&times;</button></div><iframe src={modalPdf.replace('/view','/preview')} className="w-full h-full"/></div></div>)}
+        </div>
+      );
+    };
+
+    // ========== DATABASE PEGAWAI ==========
+    const DatabasePegawai = ({ refreshParent, userRole }) => {
+      const [data, setData] = React.useState([]);
+      const [loading, setLoading] = React.useState(false);
+      const [filterLembaga, setFilterLembaga] = React.useState('');
+      const [filterNama, setFilterNama] = React.useState('');
+      const [modalOpen, setModalOpen] = React.useState(false);
+      const [editingRow, setEditingRow] = React.useState(null);
+      const [formData, setFormData] = React.useState({ 'Username (MP/ID)':'','Password':'','Name Lembaga':'','Name Pegawai':'','Latitude':'','Longitude':'','Radius (m)':'','Role':'' });
+      const [currentPage, setCurrentPage] = React.useState(1);
+      const [rowsPerPage, setRowsPerPage] = React.useState(10);
+      const canManage = userRole === 'Admin' || userRole === 'Superuser';
+      const fetchData = async () => { setLoading(true); try { const res = await callApi('getPegawai', {}); setData(res.data || []); } catch(e){ console.error(e); } setLoading(false); };
+      React.useEffect(() => { fetchData(); }, []);
+      const filtered = React.useMemo(() => data.filter(item => (item['Name Lembaga']||'').toLowerCase().includes(filterLembaga.toLowerCase()) && (item['Name Pegawai']||'').toLowerCase().includes(filterNama.toLowerCase())), [data, filterLembaga, filterNama]);
+      React.useEffect(() => setCurrentPage(1), [filterLembaga, filterNama]);
+      const totalItems = filtered.length;
+      React.useEffect(() => { if (rowsPerPage > totalItems && totalItems > 0) setRowsPerPage(totalItems); else if (totalItems === 0) setRowsPerPage(10); }, [totalItems, rowsPerPage]);
+      const effectiveRowsPerPage = rowsPerPage === totalItems ? totalItems : rowsPerPage;
+      const paginatedData = filtered.slice((currentPage-1)*effectiveRowsPerPage, currentPage*effectiveRowsPerPage);
+      const openModal = (item=null) => { if(!canManage){ Swal.fire('Akses Ditolak','','warning'); return; } if(item){ setFormData({ 'Username (MP/ID)':item['Username (MP/ID)']||'', 'Password':item['Password']||'', 'Name Lembaga':item['Name Lembaga']||'', 'Name Pegawai':item['Name Pegawai']||'', 'Latitude':item['Latitude']||'', 'Longitude':item['Longitude']||'', 'Radius (m)':item['Radius (m)']||'', 'Role':item['Role']||'' }); setEditingRow(item._rowIndex); } else { setFormData({ 'Username (MP/ID)':'','Password':'','Name Lembaga':'','Name Pegawai':'','Latitude':'','Longitude':'','Radius (m)':'','Role':'' }); setEditingRow(null); } setModalOpen(true); };
+      const handleSubmit = async () => { if(!formData['Username (MP/ID)']||!formData['Password']||!formData['Name Pegawai']){ Swal.fire('Peringatan','Username, Password, Nama Pegawai wajib','warning'); return; } setLoading(true); try { if(editingRow) await callApi('updatePegawai', { rowIndex: editingRow, values: formData }); else await callApi('addPegawai', formData); Swal.fire({icon:'success',title:'Berhasil',timer:1500}); setModalOpen(false); fetchData(); if(refreshParent) refreshParent(); } catch(e){ Swal.fire('Error',e.message,'error'); } setLoading(false); };
+      const handleDelete = async (rowIndex, nama) => { if(!canManage){ Swal.fire('Akses Ditolak','','warning'); return; } const confirm = await Swal.fire({title:'Hapus Pegawai?',text:`Hapus ${nama}?`,icon:'warning',showCancelButton:true}); if(confirm.isConfirmed){ try{ await callApi('deletePegawai',{rowIndex}); Swal.fire('Terhapus','','success'); fetchData(); }catch(e){ Swal.fire('Error',e.message,'error'); } } };
+      return (
+        <div className="space-y-6">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border flex justify-between"><h3 className="font-bold text-xl"><i className="fas fa-database"></i> Database Pegawai</h3>{canManage?<button onClick={()=>openModal()} className="bg-blue-600 text-white px-5 py-3 rounded-xl"><i className="fas fa-plus"></i> Tambah</button>:<div className="text-red-600"><i className="fas fa-lock"></i> Hanya Admin/Superuser</div>}</div>
+          <div className="bg-white p-5 rounded-2xl shadow-sm border flex gap-4"><input placeholder="Cari Lembaga" className="border p-3 rounded-xl flex-1" value={filterLembaga} onChange={e=>setFilterLembaga(e.target.value)}/><input placeholder="Cari Nama" className="border p-3 rounded-xl flex-1" value={filterNama} onChange={e=>setFilterNama(e.target.value)}/></div>
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-blue-700 text-white"><tr><th>Username</th><th>Password</th><th>Lembaga</th><th>Nama Pegawai</th><th>Latitude</th><th>Longitude</th><th>Radius</th><th>Role</th>{canManage&&<th>Aksi</th>}</tr></thead><tbody>{paginatedData.map(item=>(<tr key={item._rowIndex}><td className="px-4 py-3">{item['Username (MP/ID)']}</td><td>••••••</td><td>{item['Name Lembaga']}</td><td className="font-bold">{item['Name Pegawai']}</td><td>{item['Latitude']}</td><td>{item['Longitude']}</td><td>{item['Radius (m)']}</td><td><span className="bg-blue-100 px-2 py-1 rounded text-[10px]">{item['Role']}</span></td>{canManage&&<td><button onClick={()=>openModal(item)} className="text-blue-600 mr-2"><i className="fas fa-edit"></i></button><button onClick={()=>handleDelete(item._rowIndex,item['Name Pegawai'])} className="text-red-600"><i className="fas fa-trash"></i></button></td>}</tr>))}</tbody></table></div><TablePagination currentPage={currentPage} totalItems={totalItems} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage}/></div>
+          {modalOpen && canManage && (<div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"><div className="bg-white rounded-xl max-w-3xl w-full p-6"><h4 className="font-bold text-xl mb-4">{editingRow?'Edit Pegawai':'Tambah Pegawai'}</h4><div className="grid grid-cols-2 gap-3"><input placeholder="Username (MP/ID) *" value={formData['Username (MP/ID)']} onChange={e=>setFormData({...formData,'Username (MP/ID)':e.target.value})} className="border p-2 rounded"/><input placeholder="Password *" value={formData['Password']} onChange={e=>setFormData({...formData,'Password':e.target.value})} className="border p-2 rounded"/><select value={formData['Name Lembaga']} onChange={e=>setFormData({...formData,'Name Lembaga':e.target.value})} className="border p-2 rounded"><option value="">Pilih Lembaga</option>{lembagaList.map(l=><option key={l}>{l}</option>)}</select><input placeholder="Nama Pegawai *" value={formData['Name Pegawai']} onChange={e=>setFormData({...formData,'Name Pegawai':e.target.value})} className="border p-2 rounded"/><input placeholder="Latitude" value={formData['Latitude']} onChange={e=>setFormData({...formData,'Latitude':e.target.value})} className="border p-2 rounded"/><input placeholder="Longitude" value={formData['Longitude']} onChange={e=>setFormData({...formData,'Longitude':e.target.value})} className="border p-2 rounded"/><input placeholder="Radius (m)" value={formData['Radius (m)']} onChange={e=>setFormData({...formData,'Radius (m)':e.target.value})} className="border p-2 rounded"/><select value={formData['Role']} onChange={e=>setFormData({...formData,'Role':e.target.value})} className="border p-2 rounded"><option value="">Role</option><option>Admin</option><option>Superuser</option><option>User</option><option>Supervisor</option></select></div><div className="flex justify-end gap-2 mt-4"><button onClick={()=>setModalOpen(false)} className="px-4 py-2 border rounded">Batal</button><button onClick={handleSubmit} className="px-4 py-2 bg-blue-600 text-white rounded">Simpan</button></div></div></div>)}
+        </div>
+      );
+    };
+
+    // ========== MONITORING ==========
+    const Monitoring = ({ presensiData, refreshData, userRole }) => {
+      const [filterLembaga, setFilterLembaga] = React.useState('');
+      const [dateStart, setDateStart] = React.useState('');
+      const [dateEnd, setDateEnd] = React.useState('');
+      const isAdmin = userRole === 'Admin';
+      const canExport = userRole === 'Admin' || userRole === 'User' || userRole === 'Superuser';
+      const setThisMonth = () => { const now = new Date(); const first = new Date(now.getFullYear(), now.getMonth(), 1); const last = new Date(now.getFullYear(), now.getMonth()+1, 0); setDateStart(first.toISOString().split('T')[0]); setDateEnd(last.toISOString().split('T')[0]); };
+      const clearDate = () => { setDateStart(''); setDateEnd(''); };
+      const generatePDF = () => { const { jsPDF } = window.jspdf; const doc = new jsPDF('l','mm','a4'); let filtered = presensiData.filter(i => (i['Nama Lembaga']||'').toLowerCase().includes(filterLembaga.toLowerCase())); if(dateStart&&dateEnd){ const startNum = dateToNumber(parseIjinDate(dateStart)); const endNum = dateToNumber(parseIjinDate(dateEnd)); if(startNum&&endNum) filtered = filtered.filter(item => { const pDate = parsePresensiDate(item['Waktu']); return isDateInRangeNum(pDate, startNum, endNum); }); } doc.text("Laporan Presensi Korwil Sine", 14, 15); doc.text(`Dicetak: ${new Date().toLocaleString()}`, 14, 22); let y=28; if(filterLembaga) doc.text(`Lembaga: ${filterLembaga}`,14,y+=5); if(dateStart&&dateEnd) doc.text(`Tanggal: ${parseIjinDate(dateStart)} - ${parseIjinDate(dateEnd)}`,14,y+=5); const tableData = filtered.map(item=>[item.Waktu, item['Nama Pegawai'], item['Nama Lembaga'], item['Jenis Presensi'], item.displayRadius||item['Keterangan Radius'], item['Keterangan Bukti']||'-']); doc.autoTable({startY:y+5, head:[['Waktu','Pegawai','Lembaga','Jenis','Status','Keterangan']], body:tableData, theme:'grid', headStyles:{fillColor:[30,64,175]}, didParseCell: function(data){ const rowItem = filtered[data.row.index]; if(rowItem && data.section==='body'){ if(rowItem.isPSW) data.cell.styles.fillColor=[209,250,229]; else if(isTidakHadir(rowItem.displayRadius)) data.cell.styles.fillColor=[0,0,0]; else if(isOutsideRadius(rowItem.displayRadius)) data.cell.styles.fillColor=[254,226,226]; else if(checkLateStatus(rowItem.Waktu,rowItem['Jenis Presensi'])) data.cell.styles.fillColor=[254,249,195]; } }}); doc.save(`Laporan_${new Date().toISOString().slice(0,10)}.pdf`); };
+      const handleReset = async () => { const confirm = await Swal.fire({title:'RESET DATA?',text:'Data presensi akan dikosongkan!',icon:'warning',showCancelButton:true}); if(confirm.isConfirmed){ try{ await callApi('resetDataPresensi', {}); Swal.fire('Berhasil','Data direset','success'); refreshData(); }catch(e){ Swal.fire('Error',e.message,'error'); } } };
+      return (
+        <div className="bg-white p-8 rounded-2xl shadow-sm border space-y-8"><div className="border-b pb-6"><h3 className="text-2xl font-black"><i className="fas fa-file-export text-blue-600"></i> Manajemen Data</h3></div><div className="grid md:grid-cols-2 gap-8">{canExport?<div className="bg-slate-50 p-6 rounded-2xl"><h4 className="font-bold mb-4">Ekspor Laporan PDF</h4><div className="space-y-3"><select className="w-full border p-3 rounded-xl" value={filterLembaga} onChange={e=>setFilterLembaga(e.target.value)}><option value="">Semua Lembaga</option>{lembagaList.map(l=><option key={l}>{l}</option>)}</select><div className="flex gap-2"><input type="date" className="border p-3 rounded flex-1" value={dateStart} onChange={e=>setDateStart(e.target.value)}/><span>s.d.</span><input type="date" className="border p-3 rounded flex-1" value={dateEnd} onChange={e=>setDateEnd(e.target.value)}/></div><div className="flex gap-2"><button onClick={setThisMonth} className="bg-blue-100 px-3 py-1 rounded">Bulan Ini</button><button onClick={clearDate} className="bg-gray-200 px-3 py-1 rounded">Hapus</button></div><button onClick={generatePDF} className="w-full bg-blue-700 text-white py-3 rounded-xl font-bold"><i className="fas fa-file-pdf"></i> UNDUH PDF</button></div></div>:<div className="bg-slate-50 p-6 rounded-2xl text-center"><i className="fas fa-lock"></i> Tidak ada akses ekspor</div>}<div className="bg-red-50 p-6 rounded-2xl"><h4 className="font-bold text-red-800">Zona Berbahaya</h4><p className="text-sm mb-4">Reset semua data presensi. Tidak dapat dibatalkan.</p>{isAdmin?<button onClick={handleReset} className="w-full border-2 border-red-600 text-red-600 hover:bg-red-600 hover:text-white py-3 rounded-xl font-bold">RESET DATA</button>:<button disabled className="w-full border-2 border-gray-400 text-gray-400 py-3 rounded-xl">Reset (Hanya Admin)</button>}</div></div></div>
+      );
+    };
+
+    // ========== ACTIVITY LOG ==========
+    const ActivityLog = ({ userRole }) => {
+      const [logs, setLogs] = React.useState([]);
+      const [filterUsername, setFilterUsername] = React.useState('');
+      const [filterAction, setFilterAction] = React.useState('');
+      const [currentPage, setCurrentPage] = React.useState(1);
+      const [rowsPerPage, setRowsPerPage] = React.useState(10);
+      const canView = userRole === 'Admin';
+      React.useEffect(() => { if(canView) callApi('getActivityLogs',{}).then(res=>setLogs(res.data||[])).catch(console.error); }, [canView]);
+      const filtered = React.useMemo(() => logs.filter(l=> (l.Username||'').toLowerCase().includes(filterUsername.toLowerCase()) && (l.Action||'').toLowerCase().includes(filterAction.toLowerCase())), [logs, filterUsername, filterAction]);
+      const totalItems = filtered.length;
+      const effectiveRowsPerPage = rowsPerPage === totalItems ? totalItems : rowsPerPage;
+      const paginated = filtered.slice((currentPage-1)*effectiveRowsPerPage, currentPage*effectiveRowsPerPage);
+      if(!canView) return <div className="bg-white p-8 text-center"><i className="fas fa-lock text-6xl text-gray-400"></i><h3 className="text-xl font-bold">Akses Ditolak</h3><p>Hanya Admin</p></div>;
+      return (
+        <div className="space-y-6"><div className="bg-white p-5 rounded-2xl shadow-sm"><h3 className="font-bold text-xl"><i className="fas fa-history"></i> Log Aktivitas</h3></div><div className="bg-white p-5 rounded-2xl shadow-sm flex gap-4"><input placeholder="Cari Username" className="border p-3 rounded-xl flex-1" value={filterUsername} onChange={e=>setFilterUsername(e.target.value)}/><input placeholder="Cari Aksi" className="border p-3 rounded-xl flex-1" value={filterAction} onChange={e=>setFilterAction(e.target.value)}/></div><div className="bg-white rounded-2xl shadow-sm border overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-blue-700 text-white"><tr><th className="px-4 py-4">Timestamp</th><th>Username</th><th>Role</th><th>Action</th><th>Details</th></tr></thead><tbody>{paginated.map((log,i)=> <tr key={i}><td className="px-4 py-3">{new Date(log.Timestamp).toLocaleString()}</td><td>{log.Username}</td><td>{log.Role}</td><td><span className={`px-2 py-1 rounded text-[10px] ${log.Action==='login'?'bg-green-100':'bg-red-100'}`}>{log.Action}</span></td><td>{log.Details}</td></tr>)}</tbody></table></div><TablePagination currentPage={currentPage} totalItems={totalItems} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage}/></div></div>
+      );
+    };
+
+    // ========== PENGAJUAN PSW ==========
+    const PengajuanPSW = ({ user }) => {
+      const [pegawaiList, setPegawaiList] = React.useState([]);
+      const [formData, setFormData] = React.useState({ nip:'', jenis:'', tglAwal:'', tglAkhir:'' });
+      const [file, setFile] = React.useState(null);
+      const [loading, setLoading] = React.useState(false);
+      React.useEffect(() => { if(user?.lembaga) callApi('getPegawaiByLembaga', { lembaga: user.lembaga }).then(res=>setPegawaiList(res.data||[])).catch(console.error); }, [user]);
+      const handleFileChange = (e) => { const f = e.target.files[0]; if(f && f.type==='application/pdf' && f.size<=5*1024*1024){ const reader = new FileReader(); reader.onload = () => setFile({ name: f.name, base64: reader.result }); reader.readAsDataURL(f); } else Swal.fire('Error','File harus PDF dan maksimal 5MB','error'); };
+      const handleSubmit = async (e) => { e.preventDefault(); if(!file){ Swal.fire('Peringatan','Lampiran PDF wajib','warning'); return; } if(!formData.nip||!formData.jenis||!formData.tglAwal||!formData.tglAkhir){ Swal.fire('Peringatan','Semua field harus diisi','warning'); return; } const selected = pegawaiList.find(p=>p.nip===formData.nip); if(!selected){ Swal.fire('Error','Pegawai tidak ditemukan','error'); return; } setLoading(true); try{ await callApi('submitPengajuan', { jenis:formData.jenis, lembaga:user.lembaga, namaPegawai:selected.nama, nip:selected.nip, tglAwal:formData.tglAwal, tglAkhir:formData.tglAkhir, fileName:file.name, fileBase64:file.base64 }); Swal.fire('Berhasil','Pengajuan terkirim','success'); setFormData({ nip:'', jenis:'', tglAwal:'', tglAkhir:'' }); setFile(null); document.getElementById('fileInput').value=''; }catch(e){ Swal.fire('Error',e.message,'error'); } setLoading(false); };
+      return (
+        <div className="bg-white rounded-2xl shadow-sm border p-6 md:p-8"><div className="border-b pb-5 mb-6"><h3 className="text-xl font-bold">Form Pengajuan PSW</h3><p className="text-sm text-slate-500">Lembaga: <span className="font-semibold">{user?.lembaga}</span></p></div><form onSubmit={handleSubmit} className="space-y-6"><div><label className="block font-semibold mb-2">Pilih Pegawai</label><select required value={formData.nip} onChange={e=>setFormData({...formData,nip:e.target.value})} className="w-full border p-3 rounded-xl"><option value="">-- Pilih --</option>{pegawaiList.map(p=><option key={p.nip} value={p.nip}>{p.nama} (NIP: {p.nip})</option>)}</select></div><div className="grid md:grid-cols-3 gap-4"><div><label className="block font-semibold">Jenis</label><select required value={formData.jenis} onChange={e=>setFormData({...formData,jenis:e.target.value})} className="w-full border p-3 rounded-xl"><option value="">Pilih</option><option>Sakit</option><option>Ijin</option><option>Dinas Luar</option></select></div><div><label>Tanggal Mulai</label><input type="date" required value={formData.tglAwal} onChange={e=>setFormData({...formData,tglAwal:e.target.value})} className="w-full border p-3 rounded-xl"/></div><div><label>Tanggal Selesai</label><input type="date" required value={formData.tglAkhir} onChange={e=>setFormData({...formData,tglAkhir:e.target.value})} className="w-full border p-3 rounded-xl"/></div></div><div><label>Lampiran PDF</label><div className={`border-2 border-dashed rounded-2xl p-8 text-center ${file?'bg-green-50 border-green-400':'bg-slate-50'}`}><input id="fileInput" type="file" accept=".pdf" onChange={handleFileChange} className="hidden"/><button type="button" onClick={()=>document.getElementById('fileInput').click()} className="bg-blue-600 text-white px-4 py-2 rounded">{file ? 'Ganti File' : 'Pilih File PDF'}</button>{file && <p className="mt-2 text-sm">{file.name}</p>}</div></div><div className="flex justify-end"><button type="submit" disabled={loading} className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold">{loading?'Mengirim...':'Kirim Pengajuan'}</button></div></form></div>
+      );
+    };
+
+    // ========== APP UTAMA ==========
+    const App = () => {
+      const [user, setUser] = React.useState(null);
+      const [activeTab, setActiveTab] = React.useState('dashboard');
+      const [presensi, setPresensi] = React.useState([]);
+      const [ijin, setIjin] = React.useState([]);
+      const [loading, setLoading] = React.useState(false);
+      const fetchData = async () => { if(!user) return; setLoading(true); try { const [resP, resI] = await Promise.all([callApi('getPresensi',{}), callApi('getIjin',{})]); setPresensi(resP.data||[]); setIjin(resI.data||[]); } catch(e){ console.error(e); } setLoading(false); };
+      React.useEffect(() => { if(user) fetchData(); }, [user]);
+      const enriched = React.useMemo(() => enrichPresensiWithIjin(presensi, ijin), [presensi, ijin]);
+      const canAccessPegawai = user && (user.role === 'Admin' || user.role === 'Superuser' || user.role === 'User');
+      const tabs = [
+        {id:'dashboard', icon:'fa-chart-pie', label:'Dashboard Presensi'},
+        {id:'dokumen_ijin', icon:'fa-file-signature', label:'Dokumen Ijin (PSW)'},
+        {id:'pengajuan_psw', icon:'fa-file-upload', label:'Pengajuan PSW'},
+        ...(canAccessPegawai ? [{id:'pegawai', icon:'fa-users', label:'Database Pegawai'}] : []),
+        {id:'monitoring', icon:'fa-desktop', label:'Monitoring & Ekspor'},
+        {id:'activity', icon:'fa-history', label:'Error Logs'}
+      ];
+      const handleLogout = async () => { const confirm = await Swal.fire({title:'Keluar?',icon:'question',showCancelButton:true}); if(confirm.isConfirmed){ await logoutApi(); setUser(null); } };
+      React.useEffect(() => { const token = localStorage.getItem('authToken'); const stored = localStorage.getItem('user'); if(token && stored){ const u = JSON.parse(stored); callApi('checkSession',{},true).then(()=>setUser(u)).catch(()=>{localStorage.clear(); setUser(null);}); } }, []);
+      if(!user) return <Login onLogin={setUser}/>;
+      return (
+        <div className="min-h-screen flex flex-col md:flex-row bg-slate-50">
+          <div className="w-full md:w-72 bg-white shadow-lg border-r"><div className="p-8 bg-gradient-to-br from-blue-600 to-blue-800 flex items-center gap-4"><div className="bg-white/20 w-12 h-12 rounded-2xl flex items-center justify-center"><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Lambang_Kabupaten_Ngawi_%28svg%29.svg/1280px-Lambang_Kabupaten_Ngawi_%28svg%29.svg.png" alt="Logo" className="w-full h-full object-cover"/></div><div><div className="font-black text-xl text-white">KORWIL SINE</div><div className="text-[10px] text-blue-200">Dashboard Monitoring</div></div></div><nav className="p-6 space-y-2">{tabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition ${activeTab===tab.id?'bg-blue-50 text-blue-700':'text-slate-500 hover:bg-slate-100'}`}><i className={`fas ${tab.icon} w-6`}></i>{tab.label}</button>)}</nav><div className="p-6 border-t bg-slate-50"><div className="flex items-center gap-4 mb-6"><div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center font-black">{user.nama?.charAt(0)}</div><div><div className="text-xs text-slate-500">Petugas:</div><div className="font-bold">{user.nama}</div><div className="mt-1"><span className="px-2 py-0.5 bg-blue-100 rounded-full text-[8px]">{user.role}</span></div></div></div><button onClick={handleLogout} className="w-full bg-white hover:bg-red-50 text-red-500 py-3 rounded-xl border border-red-200"><i className="fas fa-power-off"></i> KELUAR</button></div></div>
+          <div className="flex-1 flex flex-col h-screen overflow-hidden"><header className="bg-white border-b px-8 py-5 flex justify-between items-center"><h2 className="text-2xl font-black capitalize flex items-center gap-3"><span className="w-2 h-8 bg-blue-600 rounded-full"></span>{activeTab==='dashboard'&&'Dashboard Presensi'}{activeTab==='dokumen_ijin'&&'Dokumen Ijin (PSW)'}{activeTab==='pengajuan_psw'&&'Pengajuan PSW'}{activeTab==='pegawai'&&'Database Pegawai'}{activeTab==='monitoring'&&'Monitoring & Ekspor'}{activeTab==='activity'&&'Log Monitoring'}</h2><button onClick={fetchData} className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${loading?'bg-blue-50':''}`}><i className={`fas fa-sync-alt ${loading?'fa-spin text-blue-600':'text-slate-500'}`}></i></button></header><div className="flex-1 overflow-auto p-4 md:p-8">{loading && presensi.length===0 && activeTab!=='pegawai'?<div className="h-full flex flex-col items-center justify-center"><div className="loader w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full"></div><div className="text-center mt-4">Memuat data...</div></div>:<div className="max-w-7xl mx-auto">{activeTab==='dashboard' && <Dashboard data={enriched} refreshData={fetchData} userRole={user.role} userLembaga={user.lembaga}/>}{activeTab==='dokumen_ijin' && <DokumenIjin data={ijin} refreshData={fetchData} userRole={user.role} userLembaga={user.lembaga}/>}{activeTab==='pengajuan_psw' && <PengajuanPSW user={user}/>}{activeTab==='pegawai' && canAccessPegawai && <DatabasePegawai refreshParent={fetchData} userRole={user.role}/>}{activeTab==='monitoring' && <Monitoring presensiData={enriched} refreshData={fetchData} userRole={user.role}/>}{activeTab==='activity' && <ActivityLog userRole={user.role}/>}</div>}</div></div>
+        </div>
+      );
+    };
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

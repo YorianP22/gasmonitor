@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#2E7D32">
+<title>ABI TANI PRESENSI</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  nak pe ngisi style kene ya
+</style>
+</head>
+<body>
+
+<!-- LOADING SCREEN -->
+<div id="loading-screen">...</div>
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+<!-- CAMERA PERMISSION MODAL -->
+<div class="permission-modal" id="camera-permission-modal">...</div>
+<!-- SIDEBAR OVERLAY -->
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<!-- LOGIN PAGE -->
+<div id="login-page">
+  <div class="login-card">
+    <div class="server-badge"><span class="dot"></span> Server : ABI TANI 1</div>
+    <div class="login-header">...</div>
+    <div id="login-error" class="alert alert-danger d-none"></div>
+    <div class="input-group-custom"><label>NIK</label><input type="text" id="login-nik"></div>
+    <div class="input-group-custom"><label>Password</label><input type="password" id="login-password"></div>
+    <button class="btn-login" onclick="handleLogin()">Login</button>
+    <a href="#" id="forgotPasswordLink" class="forgot-link">Lupa Password?</a>
+    
+  </div>
+</div>
+
+<!-- RESET PASSWORD MODAL -->
+<div id="resetPasswordModal" class="modal-custom">...</div>
+
+<!-- MAIN APP -->
+<div id="app">...</div>
+
+<script>
+// ========== KONFIGURASI ==========
+const GAS_URL = '/api/proxy';
+
+
+async function callAPI(action, data = {}) {
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, data })
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+</body>
+</html>
